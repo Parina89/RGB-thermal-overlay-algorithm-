@@ -47,29 +47,66 @@ def blend_soft_light(img1, img2, opacity):
     )
     return img1 * (1 - opacity) + blended * opacity
 
-def resize_images_to_match(img1, img2):
-    """Resize both images to exact same dimensions for 100% overlap."""
+def align_images_same_position(img1, img2):
+    """
+    Align both images to exact same position and size.
+    Uses feature matching for precise alignment.
+    """
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
     
-    # Use the larger dimensions to avoid losing detail
-    target_h = max(h1, h2)
-    target_w = max(w1, w2)
+    # Target size - use Image 1 as reference
+    target_h, target_w = h1, w1
     
-    # Resize both images to exact same size
-    img1_resized = cv2.resize(img1, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    # Resize Image 2 to match Image 1 exactly
     img2_resized = cv2.resize(img2, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
     
-    return img1_resized, img2_resized
+    # Convert to grayscale for feature detection
+    gray1 = cv2.cvtColor(img1, cv2.COLOR_RGB2GRAY)
+    gray2 = cv2.cvtColor(img2_resized, cv2.COLOR_RGB2GRAY)
+    
+    # Detect ORB features
+    orb = cv2.ORB_create(nfeatures=500)
+    kp1, des1 = orb.detectAndCompute(gray1, None)
+    kp2, des2 = orb.detectAndCompute(gray2, None)
+    
+    if des1 is not None and des2 is not None and len(kp1) > 10 and len(kp2) > 10:
+        # Match features
+        bf = cv2.BFMatcher(cv2.NORM_HAMMING, crossCheck=True)
+        matches = bf.match(des1, des2)
+        matches = sorted(matches, key=lambda x: x.distance)
+        
+        if len(matches) > 10:
+            # Get matched points
+            pts1 = np.float32([kp1[m.queryIdx].pt for m in matches[:50]]).reshape(-1, 1, 2)
+            pts2 = np.float32([kp2[m.trainIdx].pt for m in matches[:50]]).reshape(-1, 1, 2)
+            
+            # Find homography matrix
+            M, mask = cv2.findHomography(pts2, pts1, cv2.RANSAC, 5.0)
+            
+            if M is not None:
+                # Warp Image 2 to align with Image 1
+                img2_aligned = cv2.warpPerspective(img2_resized, M, (target_w, target_h))
+                return img1, img2_aligned, True
+    
+    # If feature matching fails, return resized images
+    return img1, img2_resized, False
 
-def process_overlay(img1, img2, blend_mode, opacity):
-    """Process the overlay of two images with 100% overlap."""
-    # Resize both images to exact same dimensions
-    img1_resized, img2_resized = resize_images_to_match(img1, img2)
+def process_overlay(img1, img2, blend_mode, opacity, use_alignment):
+    """Process the overlay with same position alignment."""
+    
+    if use_alignment:
+        img1_final, img2_final, aligned = align_images_same_position(img1, img2)
+    else:
+        # Simple resize without alignment
+        h1, w1 = img1.shape[:2]
+        img1_final = img1
+        img2_final = cv2.resize(img2, (w1, h1), interpolation=cv2.INTER_LINEAR)
+        aligned = False
     
     # Normalize to [0, 1]
-    img1_norm = img1_resized.astype(np.float32) / 255.0
-    img2_norm = img2_resized.astype(np.float32) / 255.0
+    img1_norm = img1_final.astype(np.float32) / 255.0
+    img2_norm = img2_final.astype(np.float32) / 255.0
     
     # Apply blend mode
     blend_functions = {
@@ -85,26 +122,30 @@ def process_overlay(img1, img2, blend_mode, opacity):
     result = blend_functions[blend_mode](img1_norm, img2_norm, opacity)
     result = np.clip(result * 255, 0, 255).astype(np.uint8)
     
-    return result, img1_resized, img2_resized
+    return result, img1_final, img2_final, aligned
 
 # Sidebar controls
 st.sidebar.header("⚙️ Settings")
+
 blend_mode = st.sidebar.selectbox(
     "Blend Mode",
     ['Normal', 'Multiply', 'Screen', 'Overlay', 'Difference', 'Add', 'Soft Light'],
     index=0
 )
+
 opacity = st.sidebar.slider("Image 2 Opacity", 0.0, 1.0, 0.5, 0.01)
+
+use_alignment = st.sidebar.checkbox("🎯 Auto-align images (Feature Matching)", value=True)
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("""
-### 💡 Tips:
-- **Opacity 0.5** = 50% each image
-- **Opacity 0.0** = Only Image 1
-- **Opacity 1.0** = Full blend effect
+### 💡 Alignment Info:
+- **Auto-align ON**: Uses feature matching to align images precisely
+- **Auto-align OFF**: Simple resize only
 """)
 
-# File uploaders
+# File uploaders in same row
+st.markdown("---")
 col1, col2 = st.columns(2)
 
 with col1:
@@ -125,82 +166,103 @@ if uploaded_file1 is not None and uploaded_file2 is not None:
     img1_np = np.array(image1.convert('RGB'))
     img2_np = np.array(image2.convert('RGB'))
     
-    # Get original dimensions
-    h1, w1 = img1_np.shape[:2]
-    h2, w2 = img2_np.shape[:2]
-    
-    # Process overlay with 100% overlap
-    result, img1_resized, img2_resized = process_overlay(img1_np, img2_np, blend_mode, opacity)
-    
-    # Get final dimensions
-    final_h, final_w = result.shape[:2]
-    
-    # Display image info
-    st.markdown("---")
-    st.subheader("📐 Image Dimensions (100% Overlap)")
-    
-    info_col1, info_col2, info_col3 = st.columns(3)
-    with info_col1:
-        st.metric("Image 1 Original", f"{w1} x {h1} px")
-    with info_col2:
-        st.metric("Image 2 Original", f"{w2} x {h2} px")
-    with info_col3:
-        st.metric("Output Size", f"{final_w} x {final_h} px")
-    
-    st.success(f"✅ Both images resized to **{final_w} x {final_h}** pixels for 100% overlap")
-    
-    # Display original images (resized)
-    st.markdown("---")
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.image(img1_resized, caption="Image 1 (Thermal) - Resized", use_container_width=True)
-    
-    with col2:
-        st.image(img2_resized, caption="Image 2 (RGB) - Resized", use_container_width=True)
-    
-    # Display result
-    st.markdown("---")
-    st.subheader(f"🎨 100% Overlay Result ({blend_mode}, {int(opacity*100)}% opacity)")
-    st.image(result, caption="Image 1 + Image 2 (100% Overlap)", use_container_width=True)
-    
-    # Download button
-    result_pil = Image.fromarray(result)
-    buf = io.BytesIO()
-    result_pil.save(buf, format='PNG')
-    buf.seek(0)
-    
-    st.download_button(
-        label="📥 Download Overlay Result",
-        data=buf,
-        file_name="overlay_100_percent.png",
-        mime="image/png"
+    # Process overlay
+    result, img1_final, img2_final, was_aligned = process_overlay(
+        img1_np, img2_np, blend_mode, opacity, use_alignment
     )
     
-    # Show all blend modes comparison
-    if st.checkbox("🔍 Show all blend modes comparison"):
+    # Get dimensions
+    final_h, final_w = result.shape[:2]
+    
+    # Alignment status
+    st.markdown("---")
+    if use_alignment and was_aligned:
+        st.success(f"✅ Images aligned to same position using feature matching ({final_w} x {final_h} px)")
+    elif use_alignment and not was_aligned:
+        st.warning(f"⚠️ Feature matching failed - using simple resize ({final_w} x {final_h} px)")
+    else:
+        st.info(f"ℹ️ Simple resize applied ({final_w} x {final_h} px)")
+    
+    # Display both input images side by side (same position)
+    st.markdown("---")
+    st.subheader("📍 Input Images (Same Position & Size)")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.image(img1_final, caption="Image 1 (Thermal)", use_container_width=True)
+    with col2:
+        st.image(img2_final, caption="Image 2 (RGB) - Aligned", use_container_width=True)
+    
+    # Display overlay result
+    st.markdown("---")
+    st.subheader(f"🎨 Overlay Result ({blend_mode}, {int(opacity*100)}% opacity)")
+    st.image(result, caption="Image 1 + Image 2 (Same Position Overlay)", use_container_width=True)
+    
+    # Side by side comparison with slider
+    st.markdown("---")
+    st.subheader("🔄 Interactive Comparison")
+    
+    compare_opacity = st.slider("Slide to compare Image 1 ↔ Image 2", 0.0, 1.0, 0.5, 0.01, key="compare")
+    
+    # Create comparison image
+    img1_norm = img1_final.astype(np.float32) / 255.0
+    img2_norm = img2_final.astype(np.float32) / 255.0
+    comparison = img1_norm * (1 - compare_opacity) + img2_norm * compare_opacity
+    comparison = np.clip(comparison * 255, 0, 255).astype(np.uint8)
+    
+    st.image(comparison, caption=f"Image 1 ({int((1-compare_opacity)*100)}%) ↔ Image 2 ({int(compare_opacity*100)}%)", use_container_width=True)
+    
+    # Download buttons
+    st.markdown("---")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        buf1 = io.BytesIO()
+        Image.fromarray(img1_final).save(buf1, format='PNG')
+        buf1.seek(0)
+        st.download_button("📥 Download Image 1", buf1, "image1_aligned.png", "image/png")
+    
+    with col2:
+        buf2 = io.BytesIO()
+        Image.fromarray(img2_final).save(buf2, format='PNG')
+        buf2.seek(0)
+        st.download_button("📥 Download Image 2", buf2, "image2_aligned.png", "image/png")
+    
+    with col3:
+        buf3 = io.BytesIO()
+        Image.fromarray(result).save(buf3, format='PNG')
+        buf3.seek(0)
+        st.download_button("📥 Download Overlay", buf3, "overlay_result.png", "image/png")
+    
+    # Show all blend modes
+    if st.checkbox("🔍 Show all blend modes"):
         st.markdown("---")
-        st.subheader("📊 All Blend Modes (100% Overlap)")
+        st.subheader("📊 All Blend Modes Comparison")
         
         modes = ['Normal', 'Multiply', 'Screen', 'Overlay', 'Difference', 'Add', 'Soft Light']
         cols = st.columns(4)
         
         for i, mode in enumerate(modes):
             with cols[i % 4]:
-                result_mode, _, _ = process_overlay(img1_np, img2_np, mode, opacity)
+                result_mode, _, _, _ = process_overlay(img1_np, img2_np, mode, opacity, use_alignment)
                 st.image(result_mode, caption=mode, use_container_width=True)
 
 else:
-    st.info("👆 Please upload both Image 1 (Thermal) and Image 2 (RGB) to see the 100% overlay result.")
+    st.info("👆 Please upload both Image 1 (Thermal) and Image 2 (RGB) to see the overlay.")
     
     st.markdown("---")
     st.markdown("""
     ### 📖 How to Use:
-    1. Upload your **thermal image** as Image 1
-    2. Upload your **RGB image** as Image 2
-    3. Both images will be **automatically resized** to match for 100% overlap
-    4. Adjust **blend mode** and **opacity** in the sidebar
-    5. Download the result
+    1. Upload **Image 1** (Thermal) and **Image 2** (RGB)
+    2. Both images will be **aligned to the same position**
+    3. Adjust **blend mode** and **opacity** in sidebar
+    4. Use **interactive comparison slider** to compare
+    5. Download aligned images or overlay result
+    
+    ### 🎯 Same Position Alignment:
+    - **Feature Matching**: Detects common features and aligns images precisely
+    - **Homography Transform**: Warps Image 2 to match Image 1's position
+    - **Pixel-Perfect Overlay**: Every feature aligns exactly
     
     ### 🎨 Blend Modes:
     - **Normal** - Simple transparency blend
@@ -208,11 +270,4 @@ else:
     - **Multiply** - Darkens, shows thermal patterns
     - **Overlay** - Combines contrast from both
     - **Difference** - Highlights temperature variations
-    - **Add** - Additive blending
-    - **Soft Light** - Subtle contrast enhancement
-    
-    ### ✅ 100% Overlap Feature:
-    - Both images are automatically resized to the **same dimensions**
-    - Every pixel from Image 1 aligns with corresponding pixel in Image 2
-    - No cropping or misalignment
     """)
