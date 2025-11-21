@@ -1,0 +1,168 @@
+import { useState, useRef, useEffect } from 'react';
+
+export default function ThermalOverlay() {
+  const [image1, setImage1] = useState(null);
+  const [image2, setImage2] = useState(null);
+  const [opacity, setOpacity] = useState(0.5);
+  const [blendMode, setBlendMode] = useState('normal');
+  const canvasRef = useRef(null);
+  const [img1Loaded, setImg1Loaded] = useState(null);
+  const [img2Loaded, setImg2Loaded] = useState(null);
+
+  const handleImage1 = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setImage1(url);
+      const img = new Image();
+      img.onload = () => setImg1Loaded(img);
+      img.src = url;
+    }
+  };
+
+  const handleImage2 = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setImage2(url);
+      const img = new Image();
+      img.onload = () => setImg2Loaded(img);
+      img.src = url;
+    }
+  };
+
+  useEffect(() => {
+    if (!canvasRef.current || !img1Loaded || !img2Loaded) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    
+    const w = Math.max(img1Loaded.width, img2Loaded.width);
+    const h = Math.max(img1Loaded.height, img2Loaded.height);
+    
+    canvas.width = w;
+    canvas.height = h;
+    
+    ctx.clearRect(0, 0, w, h);
+    
+    // Draw base image (thermal)
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.drawImage(img1Loaded, 0, 0, w, h);
+    
+    // Draw overlay image (RGB) with blend mode
+    ctx.globalAlpha = opacity;
+    ctx.globalCompositeOperation = blendMode;
+    ctx.drawImage(img2Loaded, 0, 0, w, h);
+    
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+  }, [img1Loaded, img2Loaded, opacity, blendMode]);
+
+  const blendModes = [
+    'normal', 'multiply', 'screen', 'overlay', 
+    'darken', 'lighten', 'color-dodge', 'color-burn',
+    'hard-light', 'soft-light', 'difference', 'exclusion',
+    'hue', 'saturation', 'color', 'luminosity'
+  ];
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white p-6">
+      <h1 className="text-2xl font-bold mb-6 text-center">Thermal & RGB Image Overlay Tool</h1>
+      
+      <div className="max-w-4xl mx-auto">
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="bg-gray-800 p-4 rounded-lg">
+            <label className="block mb-2 text-sm font-medium text-orange-400">
+              Image 1 (Thermal/Base)
+            </label>
+            <input 
+              type="file" 
+              accept="image/*" 
+              onChange={handleImage1}
+              className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-orange-600 file:text-white hover:file:bg-orange-700"
+            />
+            {image1 && (
+              <img src={image1} alt="Thermal" className="mt-2 max-h-32 rounded border border-gray-600" />
+            )}
+          </div>
+          
+          <div className="bg-gray-800 p-4 rounded-lg">
+            <label className="block mb-2 text-sm font-medium text-blue-400">
+              Image 2 (RGB/Overlay)
+            </label>
+            <input 
+              type="file" 
+              accept="image/*" 
+              onChange={handleImage2}
+              className="w-full text-sm file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:bg-blue-600 file:text-white hover:file:bg-blue-700"
+            />
+            {image2 && (
+              <img src={image2} alt="RGB" className="mt-2 max-h-32 rounded border border-gray-600" />
+            )}
+          </div>
+        </div>
+
+        <div className="bg-gray-800 p-4 rounded-lg mb-6">
+          <div className="grid grid-cols-2 gap-6">
+            <div>
+              <label className="block mb-2 text-sm font-medium">
+                Overlay Opacity: {Math.round(opacity * 100)}%
+              </label>
+              <input
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={opacity}
+                onChange={(e) => setOpacity(parseFloat(e.target.value))}
+                className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer"
+              />
+            </div>
+            
+            <div>
+              <label className="block mb-2 text-sm font-medium">Blend Mode</label>
+              <select
+                value={blendMode}
+                onChange={(e) => setBlendMode(e.target.value)}
+                className="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2"
+              >
+                {blendModes.map(mode => (
+                  <option key={mode} value={mode}>
+                    {mode.charAt(0).toUpperCase() + mode.slice(1).replace('-', ' ')}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-gray-800 p-4 rounded-lg">
+          <h2 className="text-lg font-semibold mb-4 text-center">Overlayed Result</h2>
+          {img1Loaded && img2Loaded ? (
+            <div className="flex justify-center">
+              <canvas 
+                ref={canvasRef} 
+                className="max-w-full h-auto rounded border-2 border-gray-600"
+                style={{ maxHeight: '500px' }}
+              />
+            </div>
+          ) : (
+            <div className="text-center text-gray-400 py-16 border-2 border-dashed border-gray-600 rounded">
+              Upload both images to see the overlay result
+            </div>
+          )}
+        </div>
+
+        <div className="mt-6 bg-gray-800 p-4 rounded-lg text-sm text-gray-300">
+          <h3 className="font-semibold mb-2 text-yellow-400">Tips for Thermal Overlay:</h3>
+          <p className="mb-1">• <strong>Screen</strong> - Brightens and reveals hot spots from thermal</p>
+          <p className="mb-1">• <strong>Multiply</strong> - Darkens and shows thermal patterns on RGB</p>
+          <p className="mb-1">• <strong>Overlay</strong> - Combines contrast from both images</p>
+          <p className="mb-1">• <strong>Difference</strong> - Highlights temperature variations</p>
+          <p>• <strong>Color</strong> - Applies thermal colors to RGB structure</p>
+        </div>
+      </div>
+    </div>
+  );
+}
